@@ -1,72 +1,86 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import re
+import datetime
 from collections import defaultdict
 
-# Ayarlar: Özellikleri aç/kapat
-ENABLE_DOWNSAMPLING = True   # Örnekleme özelliğini aç/kapat
-ENABLE_SUMMARIZATION = True  # Özetleme özelliğini aç/kapat
-SAMPLING_RATE = 100           # Örnekleme oranı
-SUMMARY_STEP = 10            # Özetleme adım büyüklüğü
+# Ayarlar
+ENABLE_DOWNSAMPLING = True
+ENABLE_SUMMARIZATION = False
+SAMPLING_RATE = 10  
+SUMMARY_STEP = 10  
 
-# Log dosyasını oku
-with open("logs.log", "r") as file:
-    logs = file.read()
+print("🚀 Log dosyası okunuyor...")
+try:
+    with open("logs.log", "r") as file:
+        logs = file.read()
+    print("✅ Log dosyası başarıyla okundu.")
+except Exception as e:
+    print(f"❌ Log dosyası okunurken hata oluştu: {e}")
+    exit()
 
-# Logları ayrıştırmak için dinamik regex (Timestamp ve başlıkları yakalamak için)
+# Logları ayrıştırmak için regex
 pattern = r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+) .*?: Motor (\d+) - ((?:\w+: \d+,? ?)+)"
 matches = re.findall(pattern, logs)
 
+print(f"🔍 {len(matches)} adet log kaydı bulundu.")
+
 # Motor verilerini depolamak için defaultdict
 motor_data = defaultdict(lambda: defaultdict(list))
-
-# Timestampleri tutmak için ayrı bir yapı
 timestamps = defaultdict(list)
 
-# Verileri ayrıştır ve dinamik olarak başlıklara göre grupla
+# Verileri ayrıştır ve kaydet
 for match in matches:
-    timestamp, motor_num, metrics = match
-    motor_num = int(motor_num)  # Motor numarasını al
-    timestamps[motor_num].append(timestamp)  # Timestamp'i kaydet
+    try:
+        timestamp_str, motor_num, metrics = match
+        motor_num = int(motor_num)
 
-    metrics = metrics.split(", ")  # Verileri ayır
-    for metric in metrics:
-        key, value = metric.split(": ")
-        motor_data[motor_num][key.lower()].append(
-            int(value))  # Başlıkları küçük harfe çevir
+        timestamp = datetime.datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
+        timestamps[motor_num].append(timestamp)
 
+        metrics = metrics.split(", ")
+        for metric in metrics:
+            key, value = metric.split(": ")
+            motor_data[motor_num][key.lower()].append(int(value))
+        
+        print(f"✅ Motor {motor_num} verileri başarıyla işlendi.")
+    
+    except Exception as e:
+        print(f"❌ Hata! Motor {motor_num} verileri işlenirken sorun çıktı: {e}")
 
 # Örnekleme fonksiyonu
 def downsample(data, step):
+    print(f"🔽 Downsampling uygulanıyor (step={step})...")
     return data[::step]
-
 
 # Özetleme fonksiyonu
 def summarize(data, step):
-    return [np.mean(data[i:i + step]) for i in range(0, len(data), step)]
-
+    print(f"📊 Özetleme uygulanıyor (step={step})...")
+    return [np.mean(data[i:i + step]) for i in range(0, len(data), step) if i + step <= len(data)]
 
 # Grafiklerin stilini ayarla
-plt.style.use('dark_background')  # Karanlık tema
+plt.style.use('dark_background')
 
 # Her motor için ayrı grafik oluştur
 for motor_num, data in motor_data.items():
-    fig, ax = plt.subplots(figsize=(14, 8))  # Grafik boyutunu ayarla
-    ax.set_title(f"Motor {motor_num} Metrics",
-                 fontsize=18, fontweight='bold', color='white')
+    print(f"📈 Motor {motor_num} için grafik çiziliyor...")
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+    ax.set_title(f"Motor {motor_num} Metrics", fontsize=18, fontweight='bold', color='white')
     ax.set_xlabel("Timestamp", fontsize=14, color='white')
     ax.set_ylabel("Values", fontsize=14, color='white')
 
-    # X ekseni için timestamp verilerini seç
+    time_data = timestamps[motor_num]
+    if not time_data:
+        print(f"⚠️ Uyarı: Motor {motor_num} için zaman verisi eksik, grafik çizilemez!")
+        continue
+
     if ENABLE_DOWNSAMPLING:
-        x_ticks = downsample(timestamps[motor_num], SAMPLING_RATE)
+        time_data = downsample(time_data, SAMPLING_RATE)
     elif ENABLE_SUMMARIZATION:
-        x_ticks = downsample(timestamps[motor_num], SUMMARY_STEP)
-    else:
-        x_ticks = timestamps[motor_num]
+        time_data = summarize(time_data, SUMMARY_STEP)
 
     for key, values in data.items():
-        # Verilere göre işlem yap
         if ENABLE_DOWNSAMPLING:
             y_values = downsample(values, SAMPLING_RATE)
         elif ENABLE_SUMMARIZATION:
@@ -74,36 +88,36 @@ for motor_num, data in motor_data.items():
         else:
             y_values = values
 
-        # Verileri çiz
-        ax.plot(x_ticks, y_values, label=key.capitalize(), marker="o",
-                linestyle='-', markersize=6, linewidth=1.5)
+        min_length = min(len(time_data), len(y_values))
+        if min_length == 0:
+            print(f"⚠️ Uyarı: Motor {motor_num}, {key} için yeterli veri yok, çizim atlandı!")
+            continue
 
-        # Maksimum, minimum ve ortalama değerler
-        max_val = max(y_values)
-        min_val = min(y_values)
-        avg_val = sum(y_values) / len(y_values)
-        max_idx = y_values.index(max_val)
-        min_idx = y_values.index(min_val)
+        time_data = time_data[:min_length]
+        y_values = y_values[:min_length]
 
-        # Highlight max and min points
-        ax.scatter(x_ticks[max_idx], max_val, color='#FF5733',
-                   label=f"Max {key.capitalize()}: {max_val}", zorder=5)
-        ax.scatter(x_ticks[min_idx], min_val, color='#33C1FF',
-                   label=f"Min {key.capitalize()}: {min_val}", zorder=5)
+        print(f"🔹 {key.capitalize()} verisi çiziliyor... (Veri noktası: {len(y_values)})")
+        ax.plot(time_data, y_values, label=key.capitalize(), marker="o", linestyle='-', markersize=6, linewidth=1.5)
 
-        # Draw the average line
-        ax.axhline(avg_val, color='#FFC300', linestyle='--',
-                   linewidth=1.2, alpha=0.8, zorder=4)
-        ax.text(len(y_values) - 1, avg_val, f"Avg {key.capitalize()}: {avg_val:.2f}",
-                fontsize=10, color='#FFC300', verticalalignment='center')
+        if y_values:
+            max_val = max(y_values)
+            min_val = min(y_values)
+            avg_val = sum(y_values) / len(y_values)
 
-    # Grid ve legend ayarları
+            max_idx = y_values.index(max_val)
+            min_idx = y_values.index(min_val)
+
+            ax.scatter(time_data[max_idx], max_val, color='#FF5733', label=f"Max {key.capitalize()}: {max_val}", zorder=5)
+            ax.scatter(time_data[min_idx], min_val, color='#33C1FF', label=f"Min {key.capitalize()}: {min_val}", zorder=5)
+
+            ax.axhline(avg_val, color='#FFC300', linestyle='--', linewidth=1.2, alpha=0.8, zorder=4)
+            ax.text(time_data[-1], avg_val, f"Avg {key.capitalize()}: {avg_val:.2f}", fontsize=10, color='#FFC300', verticalalignment='center')
+
     ax.legend(loc="best", fontsize=10)
     ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
 
-    # X ekseni için timestampleri döndür
     plt.xticks(rotation=45, fontsize=10, color='white')
+    ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%H:%M:%S'))
 
-# Tüm grafiklerin aynı anda gösterilmesini sağla
 plt.tight_layout()
 plt.show()
